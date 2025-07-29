@@ -1,0 +1,14 @@
+# render.yaml
+services:
+  - type: web
+    name: amazon-affiliate-bot # Apne bot ka naam yahan likh sakte hain
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn main:app --workers 1 --bind 0.0.0.0:$PORT
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false # Isko Render dashboard mein set karna hoga
+      - key: WEBHOOK_URL
+        sync: false # Isko bhi Render dashboard mein set karna hoga (aapki Render app ka URL)
+    healthCheckPath: /health # Bot ki health check karne ke liye
+    autoDeploy: true # Har GitHub push par auto-deploy enable karein
