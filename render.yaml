@@ -3,6 +3,7 @@ services:
   - type: web
     name: amazon-affiliate-bot # Apne bot ka naam yahan likh sakte hain
     env: python
+    # pythonVersion: 3.11 # <-- Is line ko hata dein, ye Render support nahi karta
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn main:app --workers 1 --bind 0.0.0.0:$PORT
     envVars:
@@ -10,5 +11,7 @@ services:
         sync: false # Isko Render dashboard mein set karna hoga
       - key: WEBHOOK_URL
         sync: false # Isko bhi Render dashboard mein set karna hoga (aapki Render app ka URL)
-    healthCheckPath: /health # Bot ki health check karne ke liye
+      - key: PYTHON_VERSION # <-- Ye nayi line add karein
+        value: 3.11         # <-- Ye nayi line add karein (ya 3.10/3.12 jo aap chahein)
+    healthCheckPath: /health
     autoDeploy: true # Har GitHub push par auto-deploy enable karein
