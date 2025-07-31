@@ -121,11 +121,11 @@ def handle_amazon_url(chat_id, user_id, url):
             if len(title) > 100:
                 title = title[:97] + "..."
             
-            # Naya output format with clickable link
+            # Naya output format with clickable and visible link
             response_message = (
                 f"**{title}**\n\n"
-                f"**Price:** {product_info['price']}\n\n"
-                f"[Buy Link]({shortened_url})\n\n" # <-- Yahan link clickable banayi
+                f"[Click here to Buy]({shortened_url})\n"
+                f"Link: `{shortened_url}`\n\n"
                 "Copy link and Always open in browser"
             )
             
@@ -141,7 +141,8 @@ def handle_amazon_url(chat_id, user_id, url):
             title = product_info.get('title', 'Amazon Offer/Page')
             response_message = (
                 f"**{title}**\n\n"
-                f"[Link]({shortened_url})\n\n" # <-- Yahan bhi clickable link
+                f"[Click here for Link]({shortened_url})\n"
+                f"Link: `{shortened_url}`\n\n"
                 "Copy link and Always open in browser"
             )
             send_message(chat_id, response_message)
