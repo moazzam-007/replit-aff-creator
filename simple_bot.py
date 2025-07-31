@@ -18,7 +18,7 @@ app = Flask(__name__, template_folder='templates')
 
 # Bot configuration
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-CHANNEL_ID = os.getenv('CHANNEL_ID') # <-- Naya environment variable add kiya hai
+CHANNEL_ID = os.getenv('CHANNEL_ID')
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 # Initialize services
@@ -97,29 +97,23 @@ def handle_amazon_url(chat_id, user_id, url):
     try:
         logger.info(f"🔗 Processing Amazon URL for user {user_id}: {url}")
         
-        # Send processing message
         send_message(chat_id, "🔍 Processing kar raha hun... Wait karo! ⏳")
         
-        # Extract product information
         logger.info("📊 Extracting product info...")
         product_info = amazon_scraper.extract_product_info(url)
         
-        # Agar scraper ne kuch bhi info nahi nikali
         if not product_info:
             send_message(chat_id, 
                 "😔 Sorry! Product information extract nahi kar paya.\n"
                 "Kya aap sure hain ki ye valid Amazon link hai? 🤔")
             return
 
-        # Generate affiliate link
         logger.info("🔗 Generating affiliate link...")
         affiliate_url = amazon_scraper.generate_affiliate_link(url)
         
-        # Shorten the affiliate link
         logger.info("✂️ Shortening URL...")
         shortened_url = url_shortener.shorten_url(affiliate_url)
         
-        # Check if it's a product link or a general page link
         is_product_link = product_info.get('is_product_link', False)
         
         if is_product_link:
@@ -127,33 +121,31 @@ def handle_amazon_url(chat_id, user_id, url):
             if len(title) > 100:
                 title = title[:97] + "..."
             
-            # Naya output format
+            # Naya output format with clickable link
             response_message = (
                 f"**{title}**\n\n"
                 f"**Price:** {product_info['price']}\n\n"
-                f"**Buy Link:** `{shortened_url}`\n\n"
+                f"[Buy Link]({shortened_url})\n\n" # <-- Yahan link clickable banayi
                 "Copy link and Always open in browser"
             )
             
-            # Send product image if available
             if product_info.get('image_url'):
                 success = send_photo(chat_id, product_info['image_url'], response_message)
-                if CHANNEL_ID and success: # Channel mein bhi post karega
+                if CHANNEL_ID and success:
                     send_photo(CHANNEL_ID, product_info['image_url'], response_message)
             else:
                 send_message(chat_id, response_message)
                 if CHANNEL_ID:
                     send_message(CHANNEL_ID, response_message)
         else:
-            # Output format for page/offer links
             title = product_info.get('title', 'Amazon Offer/Page')
             response_message = (
                 f"**{title}**\n\n"
-                f"**Link:** `{shortened_url}`\n\n"
+                f"[Link]({shortened_url})\n\n" # <-- Yahan bhi clickable link
                 "Copy link and Always open in browser"
             )
             send_message(chat_id, response_message)
-            if CHANNEL_ID: # Channel mein bhi post karega
+            if CHANNEL_ID:
                 send_message(CHANNEL_ID, response_message)
 
         logger.info(f"✅ Successfully processed URL for user {user_id}")
@@ -208,7 +200,7 @@ def is_amazon_url(text):
     amazon_url_patterns = [
         r'https?://(?:www\.)?amazon\.[a-z.]{2,6}',
         r'https?://(?:amzn\.to|a\.co)',
-        r'https?://(?:www\.)?wishlink\.com' # wishlink.com bhi Amazon links par redirect kar sakta hai
+        r'https?://(?:www\.)?wishlink\.com'
     ]
     
     for pattern in amazon_url_patterns:
@@ -226,7 +218,6 @@ def webhook():
             logger.warning("No data received in webhook.")
             return jsonify({"status": "error", "message": "No data"}), 400
         
-        # Extract message info
         message = update_data.get('message', {})
         chat_id = message.get('chat', {}).get('id')
         user_id = message.get('from', {}).get('id')
@@ -238,7 +229,6 @@ def webhook():
         
         logger.info(f"📨 Processing message from user {user_id} (chat: {chat_id}): {text[:50]}...")
         
-        # Handle commands
         if text.startswith('/start'):
             handle_start_command(chat_id, user_id)
         elif text.startswith('/help'):
