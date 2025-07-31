@@ -18,6 +18,7 @@ app = Flask(__name__, template_folder='templates') # templates folder specify ki
 
 # Bot configuration
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+CHANNEL_ID = os.getenv('CHANNEL_ID') # <-- Naya environment variable add kiya hai
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 # Initialize services
@@ -64,21 +65,13 @@ def handle_start_command(chat_id, user_id):
 Mein aapka shopping assistant hun! 😊
 
 ✨ **Main kya kar sakta hun:**
-• Amazon product links process karta hun
+• Har tarah ki Amazon links ko process karta hun (shortened, offer, page links)
 • Product ki image aur details nikalta hun
 • Affiliate link banata hun (`budgetlooks08-21` tag ke saath)
-• Shortened URL provide karta hun
+• Har link ko TinyURL se shorten karta hun
 
 📝 **Kaise use kare:**
-Bas koi bhi Amazon product ka link bhej do!
-
-Supported domains:
-• amazon.com
-• amazon.in
-• amazon.co.uk
-• aur bhi!
-
-Type /help for more details! 🚀"""
+Bas koi bhi Amazon link bhej do! 🚀"""
     
     return send_message(chat_id, welcome_message)
 
@@ -86,26 +79,14 @@ def handle_help_command(chat_id, user_id):
     """Handle /help command"""
     help_message = """🔧 **Help & Instructions:**
 
-**Supported Amazon domains:**
-• amazon.com
-• amazon.in
-• amazon.co.uk
-• amazon.ca
-• amazon.de
-• amazon.fr
-• amazon.it
-• amazon.es
+**Supported Amazon links:**
+• Product links: `amazon.in/dp/...`, `amzn.to/...`
+• Offer & Page links: `amazon.in/h/rewards/...`, `amazon.in/amazonprime...`
 
 **How to use:**
-1️⃣ Copy any Amazon product URL
+1️⃣ Copy any Amazon link
 2️⃣ Send it to me in chat
-3️⃣ I'll extract product info & image
-4️⃣ Generate affiliate link with `budgetlooks08-21` tag
-5️⃣ Provide shortened URL
-
-**Example:**
-Send: `https://amazon.in/dp/B08N5WRWNW`
-Get: Product image + affiliate link
+3️⃣ I'll process the link and send you an affiliate link with details
 
 Need more help? Just ask! 💬"""
     
@@ -123,12 +104,13 @@ def handle_amazon_url(chat_id, user_id, url):
         logger.info("📊 Extracting product info...")
         product_info = amazon_scraper.extract_product_info(url)
         
-        if not product_info or not product_info.get('title'):
+        # Agar scraper ne kuch bhi info nahi nikali
+        if not product_info:
             send_message(chat_id, 
                 "😔 Sorry! Product information extract nahi kar paya.\n"
-                "Kya aap sure hain ki ye valid Amazon product link hai? 🤔")
+                "Kya aap sure hain ki ye valid Amazon link hai? 🤔")
             return
-        
+
         # Generate affiliate link
         logger.info("🔗 Generating affiliate link...")
         affiliate_url = amazon_scraper.generate_affiliate_link(url)
@@ -137,32 +119,42 @@ def handle_amazon_url(chat_id, user_id, url):
         logger.info("✂️ Shortening URL...")
         shortened_url = url_shortener.shorten_url(affiliate_url)
         
-        # Prepare response message
-        title = product_info['title']
-        # Truncate title if too long, and add "..."
-        if len(title) > 100:
-            title = title[:97] + "..."
+        # Check if it's a product link or a general page link
+        is_product_link = product_info.get('is_product_link', False)
         
-        response_message = f"🛍️ **{title}**\n\n"
-        
-        if product_info.get('price'):
-            response_message += f"💰 **Price:** {product_info['price']}\n\n"
-        
-        response_message += f"🔗 **Yahan hai aapka affiliate link:**\n`{shortened_url}`\n\n"
-        response_message += "✨ Is link se purchase karne par mujhe commission milegi! Thank you! 😊"
-        
-        # Send product image if available
-        if product_info.get('image_url'):
-            success = send_photo(chat_id, product_info['image_url'], response_message)
-            if not success:
-                # If photo fails, send message as fallback
-                logger.warning(f"Failed to send photo for {url}, sending as text message.")
-                send_message(chat_id, response_message)
-        else:
-            logger.info(f"No image URL found for {url}, sending as text message.")
-            send_message(chat_id, response_message)
+        if is_product_link:
+            title = product_info['title']
+            if len(title) > 100:
+                title = title[:97] + "..."
             
-        logger.info(f"✅ Successfully processed Amazon URL for user {user_id}")
+            response_message = f"🛍️ **{title}**\n\n"
+            
+            if product_info.get('price'):
+                response_message += f"💰 **Price:** {product_info['price']}\n\n"
+            
+            response_message += f"🔗 **Yahan hai aapka affiliate link:**\n`{shortened_url}`\n\n"
+            response_message += "✨ Is link se purchase karne par mujhe commission milegi! Thank you! 😊"
+            
+            # Send product image if available
+            if product_info.get('image_url'):
+                success = send_photo(chat_id, product_info['image_url'], response_message)
+                if CHANNEL_ID and success: # <-- Yahan check add kiya hai
+                    send_photo(CHANNEL_ID, product_info['image_url'], response_message)
+            else:
+                send_message(chat_id, response_message)
+                if CHANNEL_ID:
+                    send_message(CHANNEL_ID, response_message)
+        else:
+            # Output format for page/offer links
+            title = product_info.get('title', 'Amazon Offer/Page')
+            response_message = f"🔗 **{title}**\n\n"
+            response_message += f"**Yahan hai aapka affiliate link:**\n`{shortened_url}`\n\n"
+            response_message += "✨ Is link se purchase karne par mujhe commission milegi! Thank you! 😊"
+            send_message(chat_id, response_message)
+            if CHANNEL_ID: # <-- Yahan check add kiya hai
+                send_message(CHANNEL_ID, response_message)
+
+        logger.info(f"✅ Successfully processed URL for user {user_id}")
             
     except Exception as e:
         logger.error(f"❌ Error handling Amazon URL for user {user_id}: {e}")
@@ -184,23 +176,23 @@ def handle_general_message(chat_id, user_id, message):
         elif any(word in message_lower for word in ['how', 'kaise', 'kya', 'help']):
             response = ("Main Amazon affiliate bot hun! 🤖\n\n"
                         "📝 **Kaise use kare:**\n"
-                        "1. Amazon product link bhejo\n"
-                        "2. Main image extract karunga\n"
+                        "1. Amazon link bhejo\n"
+                        "2. Main process karunga\n"
                         "3. Affiliate link banaunga\n"
                         "4. Shortened URL dunga\n\n"
                         "Try karo! 🚀")
             
         elif 'amazon' in message_lower:
             response = ("Haan! Amazon ke liye hi bana hun! 🛍️\n"
-                        "Koi bhi Amazon product ka link bhejo! ⚡\n\n"
-                        "Example: amazon.in/dp/PRODUCT_ID")
+                        "Koi bhi Amazon link bhejo! ⚡\n\n"
+                        "Example: `amazon.in/dp/PRODUCT_ID`")
             
         else:
-            response = ("Main sirf Amazon product links handle karta hun! 🛒\n\n"
-                        "Koi Amazon product ka link bhejo jaise:\n"
+            response = ("Main sirf Amazon links handle karta hun! 🛒\n\n"
+                        "Koi Amazon link bhejo jaise:\n"
                         "• `amazon.in/dp/PRODUCT_ID`\n"
-                        "• `amazon.com/dp/PRODUCT_ID`\n\n"
-                        "Main image aur affiliate link banake dunga! 😊")
+                        "• `amzn.to/PRODUCT_ID`\n\n"
+                        "Main affiliate link banake dunga! 😊")
         
         send_message(chat_id, response)
         logger.info(f"✅ General message handled for user: {user_id}")
@@ -212,30 +204,21 @@ def handle_general_message(chat_id, user_id, message):
 def is_amazon_url(text):
     """Check if text contains Amazon URL"""
     amazon_url_patterns = [
-        # Standard product page URL
-        r'https?://(?:www\.)?amazon\.[a-z.]{2,6}/(?:[^/]+/)?(?:dp|gp/product)/([A-Z0-9]{10})',
-        # Shortened amzn.to links
-        r'https?://amzn\.to/[a-zA-Z0-9]+',
-        # Shortened a.co links
-        r'https?://a\.co/[a-zA-Z0-9]+',
-        # Amazon.tld/something/dp/ASIN (sometimes dp is nested)
-        r'https?://(?:www\.)?amazon\.[a-z.]{2,6}/(?:[^/]+/)*dp/([A-Z0-9]{10})',
-        # General amazon.tld/any_path that might contain ASIN
-        r'https?://(?:www\.)?amazon\.[a-z.]{2,6}/[^\s]+', # Catch-all for any amazon link
-        # Direct ASIN in some cases (less common but good to catch)
-        r'([A-Z0-9]{10})' # If user just sends ASIN, though requires context
+        r'https?://(?:www\.)?amazon\.[a-z.]{2,6}/', # All amazon.tld domains
+        r'https?://(?:amzn\.to|a\.co)/', # Shortened URLs
+        r'([A-Z0-9]{10})' # Direct ASIN as a fallback (less reliable)
     ]
     
     for pattern in amazon_url_patterns:
         if re.search(pattern, text):
-            # For pure ASINs, ensure it's not just random text that looks like an ASIN
-            # This is a heuristic, can be improved
-            if re.match(r'^[A-Z0-9]{10}$', text) and not re.match(r'[a-z]', text): # check if it's only caps/numbers
-                return True # Assuming direct ASINs are product IDs
-            elif re.match(r'https?://', text): # If it's a full URL, it's likely Amazon
+            # A simple heuristic to avoid matching random 10-digit strings
+            if 'dp/' in text or 'amzn.to' in text or 'a.co' in text:
+                return True
+            elif re.match(r'^[A-Z0-9]{10}$', text) and not re.match(r'[a-z]', text):
+                return True
+            elif re.search(r'amazon\.[a-z.]{2,6}', text):
                 return True
     return False
-
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
