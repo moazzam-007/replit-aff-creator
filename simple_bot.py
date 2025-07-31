@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 # Initialize Flask app
-app = Flask(__name__, template_folder='templates') # templates folder specify kiya
+app = Flask(__name__, template_folder='templates')
 
 # Bot configuration
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -35,7 +35,7 @@ def send_message(chat_id, text, parse_mode='Markdown'):
             'parse_mode': parse_mode
         }
         response = requests.post(url, json=data, timeout=10)
-        response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+        response.raise_for_status()
         return response.status_code == 200
     except requests.exceptions.RequestException as e:
         logger.error(f"❌ Error sending message to chat {chat_id}: {e}")
@@ -62,7 +62,7 @@ def handle_start_command(chat_id, user_id):
     """Handle /start command"""
     welcome_message = """🛍️ **Welcome to Amazon Affiliate Bot!**
 
-Mein aapka shopping assistant hun! 😊
+Main aapka shopping assistant hun! 😊
 
 ✨ **Main kya kar sakta hun:**
 • Har tarah ki Amazon links ko process karta hun (shortened, offer, page links)
@@ -127,18 +127,18 @@ def handle_amazon_url(chat_id, user_id, url):
             if len(title) > 100:
                 title = title[:97] + "..."
             
-            response_message = f"🛍️ **{title}**\n\n"
-            
-            if product_info.get('price'):
-                response_message += f"💰 **Price:** {product_info['price']}\n\n"
-            
-            response_message += f"🔗 **Yahan hai aapka affiliate link:**\n`{shortened_url}`\n\n"
-            response_message += "✨ Is link se purchase karne par mujhe commission milegi! Thank you! 😊"
+            # Naya output format
+            response_message = (
+                f"**{title}**\n\n"
+                f"**Price:** {product_info['price']}\n\n"
+                f"**Buy Link:** `{shortened_url}`\n\n"
+                "Copy link and Always open in browser"
+            )
             
             # Send product image if available
             if product_info.get('image_url'):
                 success = send_photo(chat_id, product_info['image_url'], response_message)
-                if CHANNEL_ID and success: # <-- Yahan check add kiya hai
+                if CHANNEL_ID and success: # Channel mein bhi post karega
                     send_photo(CHANNEL_ID, product_info['image_url'], response_message)
             else:
                 send_message(chat_id, response_message)
@@ -147,11 +147,13 @@ def handle_amazon_url(chat_id, user_id, url):
         else:
             # Output format for page/offer links
             title = product_info.get('title', 'Amazon Offer/Page')
-            response_message = f"🔗 **{title}**\n\n"
-            response_message += f"**Yahan hai aapka affiliate link:**\n`{shortened_url}`\n\n"
-            response_message += "✨ Is link se purchase karne par mujhe commission milegi! Thank you! 😊"
+            response_message = (
+                f"**{title}**\n\n"
+                f"**Link:** `{shortened_url}`\n\n"
+                "Copy link and Always open in browser"
+            )
             send_message(chat_id, response_message)
-            if CHANNEL_ID: # <-- Yahan check add kiya hai
+            if CHANNEL_ID: # Channel mein bhi post karega
                 send_message(CHANNEL_ID, response_message)
 
         logger.info(f"✅ Successfully processed URL for user {user_id}")
@@ -204,20 +206,14 @@ def handle_general_message(chat_id, user_id, message):
 def is_amazon_url(text):
     """Check if text contains Amazon URL"""
     amazon_url_patterns = [
-        r'https?://(?:www\.)?amazon\.[a-z.]{2,6}/', # All amazon.tld domains
-        r'https?://(?:amzn\.to|a\.co)/', # Shortened URLs
-        r'([A-Z0-9]{10})' # Direct ASIN as a fallback (less reliable)
+        r'https?://(?:www\.)?amazon\.[a-z.]{2,6}',
+        r'https?://(?:amzn\.to|a\.co)',
+        r'https?://(?:www\.)?wishlink\.com' # wishlink.com bhi Amazon links par redirect kar sakta hai
     ]
     
     for pattern in amazon_url_patterns:
         if re.search(pattern, text):
-            # A simple heuristic to avoid matching random 10-digit strings
-            if 'dp/' in text or 'amzn.to' in text or 'a.co' in text:
-                return True
-            elif re.match(r'^[A-Z0-9]{10}$', text) and not re.match(r'[a-z]', text):
-                return True
-            elif re.search(r'amazon\.[a-z.]{2,6}', text):
-                return True
+            return True
     return False
 
 @app.route('/webhook', methods=['POST'])
@@ -248,7 +244,6 @@ def webhook():
         elif text.startswith('/help'):
             handle_help_command(chat_id, user_id)
         elif is_amazon_url(text):
-            # Pass the original text, amazon_scraper will clean it
             handle_amazon_url(chat_id, user_id, text)
         else:
             handle_general_message(chat_id, user_id, text)
