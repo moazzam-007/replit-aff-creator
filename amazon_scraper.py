@@ -26,7 +26,6 @@ class AmazonScraper:
     def _resolve_url(self, url):
         """Resolves shortened URLs and redirects to get the final Amazon URL."""
         try:
-            # Use GET request to resolve redirects, which is more reliable than HEAD
             response = requests.get(url, headers=self.headers, allow_redirects=True, timeout=10)
             response.raise_for_status()
             final_url = response.url
@@ -40,14 +39,12 @@ class AmazonScraper:
         """Extracts product info for both product pages and general pages."""
         product_info = {
             'title': None,
-            'price': None,
             'image_url': None,
             'is_product_link': False
         }
         
         resolved_url = self._resolve_url(url)
         
-        # Check if the resolved URL looks like a product page
         if '/dp/' in resolved_url or '/gp/product/' in resolved_url:
             return self._scrape_product_page(resolved_url)
         else:
@@ -60,21 +57,14 @@ class AmazonScraper:
             response.raise_for_status()
             soup = BeautifulSoup(response.content, 'lxml')
 
-            # Extract Title
             title_tag = soup.find(id='productTitle')
             title = title_tag.get_text(strip=True) if title_tag else None
 
-            # Extract Price
-            price_span = soup.find(id='priceblock_ourprice') or soup.find(class_='a-price-whole') or soup.find('span', {'class': 'a-offscreen'})
-            price = price_span.get_text(strip=True) if price_span else None
-
-            # Extract Image
             image_tag = soup.find('img', {'id': 'landingImage'})
             image_url = image_tag.get('src') if image_tag else None
 
             product_info = {
                 'title': title,
-                'price': price,
                 'image_url': image_url,
                 'is_product_link': True
             }
@@ -94,17 +84,14 @@ class AmazonScraper:
             response.raise_for_status()
             soup = BeautifulSoup(response.content, 'lxml')
 
-            # Try to get title from meta tags or page title
             title_tag = soup.find('meta', property='og:title')
             title = title_tag['content'] if title_tag and title_tag.get('content') else soup.title.string if soup.title else 'Amazon Offer/Page'
             
-            # Clean up title
             if title and 'Amazon.in' in title:
                 title = title.split('Amazon.in:', 1)[-1].strip()
 
             product_info = {
                 'title': title,
-                'price': None,
                 'image_url': None,
                 'is_product_link': False
             }
