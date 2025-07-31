@@ -20,213 +20,124 @@ class AmazonScraper:
         self.supported_domains = [
             'amazon.com', 'amazon.in', 'amazon.co.uk', 'amazon.ca',
             'amazon.de', 'amazon.fr', 'amazon.it', 'amazon.es',
-            'amzn.to', 'a.co' # Shortened domains will be redirected
+            'amzn.to', 'a.co'
         ]
 
-    def _get_asin_from_url(self, url):
-        """Extracts ASIN (Product ID) from various Amazon URL formats."""
-        parsed_url = urlparse(url)
-        
-        # Check for standard /dp/ASIN or /gp/product/ASIN patterns
-        match = re.search(r'(?:dp|gp/product)/([A-Z0-9]{10})', parsed_url.path)
-        if match:
-            return match.group(1)
-
-        # Check query parameters for ASIN (less common for product pages but possible)
-        query_params = parse_qs(parsed_url.query)
-        if 'ASIN' in query_params:
-            return query_params['ASIN'][0]
-        if 'asin' in query_params:
-            return query_params['asin'][0]
-        
-        # If it's a shortened URL (amzn.to, a.co), we can't get ASIN directly from URL
-        # The scraper will have to follow the redirect and get it from the final URL/page.
-        return None
-
-    def _clean_amazon_url(self, url):
-        """Cleans and normalizes Amazon URLs to a standard format (e.g., .../dp/ASIN)."""
-        parsed_url = urlparse(url)
-        domain = parsed_url.netloc
-
-        # Handle shortened URLs by attempting to get the final redirected URL
-        if "amzn.to" in domain or "a.co" in domain:
-            try:
-                # Allow redirects to get the full Amazon URL
-                response = requests.head(url, headers=self.headers, allow_redirects=True, timeout=5)
-                response.raise_for_status()
-                final_url = response.url
-                logger.info(f"Shortened URL {url} redirected to: {final_url}")
-                parsed_url = urlparse(final_url)
-                domain = parsed_url.netloc # Update domain to the final one
-            except requests.exceptions.RequestException as e:
-                logger.warning(f"Could not resolve shortened URL {url}: {e}. Proceeding with original.")
-        
-        # Ensure it's a supported domain after potential redirect
-        if not any(d in domain for d in self.supported_domains):
-             logger.warning(f"URL domain {domain} not in supported domains. Returning original URL.")
-             return url # Or raise an error, depending on desired strictness
-
-        asin = self._get_asin_from_url(parsed_url.geturl()) # Get ASIN from the (potentially resolved) URL
-
-        if asin:
-            # Construct a clean URL with just the domain and /dp/ASIN
-            cleaned_url = urlunparse(parsed_url._replace(path=f"/dp/{asin}", query='', fragment=''))
-            logger.info(f"🔗 Cleaned URL: {cleaned_url}")
-            return cleaned_url
-        
-        logger.warning(f"Could not extract ASIN from {url}. Using original URL for scraping.")
-        return url # Fallback to original URL if ASIN extraction fails
-
+    def _resolve_url(self, url):
+        """Resolves shortened URLs like amzn.to to get the final Amazon URL."""
+        try:
+            if not any(domain in url for domain in ['amzn.to', 'a.co']):
+                return url # Not a shortened URL, no need to resolve
+            
+            response = requests.head(url, headers=self.headers, allow_redirects=True, timeout=10)
+            response.raise_for_status()
+            final_url = response.url
+            logger.info(f"Shortened URL {url} resolved to: {final_url}")
+            return final_url
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Could not resolve URL {url}: {e}. Proceeding with original.")
+            return url
+    
     def extract_product_info(self, url):
-        """
-        Extracts product title, image URL, and price from an Amazon product page.
-        This scraper is designed to be robust but may need updates if Amazon changes its page structure.
-        """
+        """Extracts product info for both product pages and general pages."""
         product_info = {
             'title': None,
             'image_url': None,
-            'price': None
+            'price': None,
+            'is_product_link': False # Flag to distinguish product vs general links
         }
-
-        # First, clean the URL to get a standard product page URL
-        effective_url = self._clean_amazon_url(url)
         
+        resolved_url = self._resolve_url(url)
+        
+        # Check if the resolved URL looks like a product page
+        if '/dp/' in resolved_url or '/gp/product/' in resolved_url:
+            return self._scrape_product_page(resolved_url)
+        else:
+            return self._scrape_general_page(resolved_url)
+
+    def _scrape_product_page(self, url):
+        """Scrapes a specific Amazon product page for details."""
         try:
-            logger.info(f"Attempting to scrape from: {effective_url}")
-            response = requests.get(effective_url, headers=self.headers, timeout=20) # Increased timeout
-            response.raise_for_status() # Raise an HTTPError for bad responses (4xx or 5xx)
-            
-            soup = BeautifulSoup(response.content, 'lxml') # Using lxml parser for speed
+            response = requests.get(url, headers=self.headers, timeout=20)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.content, 'lxml')
 
             # Extract Title
-            # Priority 1: productTitle (most common)
             title_tag = soup.find(id='productTitle')
-            if title_tag:
-                product_info['title'] = title_tag.get_text(strip=True)
-            else:
-                # Priority 2: title (some older/different pages)
-                title_tag = soup.find(id='title')
-                if title_tag:
-                    product_info['title'] = title_tag.get_text(strip=True)
-                else:
-                    # Priority 3: meta title as a last resort
-                    meta_title = soup.find('meta', {'property': 'og:title'})
-                    if meta_title and meta_title.get('content'):
-                        product_info['title'] = meta_title['content'].split(':', 1)[-1].strip() # Remove "Amazon.in: " prefix
-
-
-            # Extract Image URL
-            # Priority 1: landingImage data-a-dynamic-image (contains high-res images)
-            image_tag = soup.find('img', {'id': 'landingImage'})
-            if image_tag and image_tag.get('data-a-dynamic-image'):
-                try:
-                    img_json = json.loads(image_tag['data-a-dynamic-image'])
-                    # Get the largest image URL (keys are URLs, values are [width, height])
-                    product_info['image_url'] = sorted(img_json.keys(), key=lambda k: max(img_json[k]), reverse=True)[0]
-                except (json.JSONDecodeError, IndexError) as e:
-                    logger.warning(f"Error parsing data-a-dynamic-image: {e}. Falling back to src.")
-                    product_info['image_url'] = image_tag.get('src') # Fallback to simple src
-            elif image_tag: # Fallback if data-a-dynamic-image not present
-                product_info['image_url'] = image_tag.get('src')
-            else:
-                # Priority 2: imgTagWrapperId (common for main image container)
-                img_wrapper = soup.find(id='imgTagWrapperId')
-                if img_wrapper:
-                    img_tag_in_wrapper = img_wrapper.find('img')
-                    if img_tag_in_wrapper:
-                        product_info['image_url'] = img_tag_in_wrapper.get('src')
-                # Priority 3: Other common image containers or meta tags
-                if not product_info['image_url']:
-                    meta_image = soup.find('meta', {'property': 'og:image'})
-                    if meta_image and meta_image.get('content'):
-                        product_info['image_url'] = meta_image['content']
-
+            title = title_tag.get_text(strip=True) if title_tag else None
 
             # Extract Price
-            # Priority 1: Common price IDs/classes
-            price_span = soup.find(id='priceblock_ourprice') or \
-                         soup.find(id='priceblock_saleprice') or \
-                         soup.find(class_='a-price-whole') or \
-                         soup.find('span', {'class': 'a-offscreen'}) # Invisible price
-            
-            if price_span:
-                price_text = price_span.get_text(strip=True)
-                # For a-offscreen, currency symbol might be separate
-                if soup.find('span', {'class': 'a-price-symbol'}) and 'a-offscreen' in price_span.get('class', []):
-                    symbol = soup.find('span', {'class': 'a-price-symbol'}).get_text(strip=True)
-                    product_info['price'] = f"{symbol}{price_text}"
-                else:
-                    product_info['price'] = price_text
-            else:
-                # Priority 2: Check for 'price' in JavaScript variables (more complex)
-                # This often involves finding a script tag with 'jQuery.parseJSON' or similar
-                # For now, keeping it simpler, relying on direct HTML elements.
-                pass 
+            price_span = soup.find(id='priceblock_ourprice') or soup.find(class_='a-price-whole') or soup.find('span', {'class': 'a-offscreen'})
+            price = price_span.get_text(strip=True) if price_span else None
 
-            if not product_info['title']:
-                logger.warning(f"Could not extract title from {effective_url}")
-            if not product_info['image_url']:
-                logger.warning(f"Could not extract image from {effective_url}")
-            if not product_info['price']:
-                logger.warning(f"Could not extract price from {effective_url}")
+            # Extract Image
+            image_tag = soup.find('img', {'id': 'landingImage'})
+            image_url = image_tag.get('src') if image_tag else None
 
-            logger.info(f"Extracted info: Title='{product_info['title']}', Image='{product_info['image_url']}', Price='{product_info['price']}'")
-
+            product_info = {
+                'title': title,
+                'price': price,
+                'image_url': image_url,
+                'is_product_link': True
+            }
+            logger.info(f"Extracted product info for {url}: {product_info['title']}")
+            return product_info
         except requests.exceptions.RequestException as e:
-            logger.error(f"Error fetching URL {effective_url}: {e}")
+            logger.error(f"Error scraping product page {url}: {e}")
+            return None
         except Exception as e:
-            logger.error(f"Error scraping product info from {effective_url}: {e}", exc_info=True) # exc_info=True for full traceback
+            logger.error(f"Error extracting info from product page {url}: {e}", exc_info=True)
+            return None
 
-        return product_info
+    def _scrape_general_page(self, url):
+        """Scrapes a general Amazon page (e.g., offer or search results) for a title."""
+        try:
+            response = requests.get(url, headers=self.headers, timeout=20)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.content, 'lxml')
+
+            # Try to get title from meta tags or page title
+            title_tag = soup.find('meta', property='og:title')
+            title = title_tag['content'] if title_tag and title_tag.get('content') else soup.title.string if soup.title else 'Amazon Offer/Page'
+            
+            # Clean up title
+            if title and 'Amazon.in' in title:
+                title = title.split('Amazon.in:', 1)[-1].strip()
+
+            product_info = {
+                'title': title,
+                'price': None,
+                'image_url': None,
+                'is_product_link': False
+            }
+            logger.info(f"Extracted general page title for {url}: {product_info['title']}")
+            return product_info
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error scraping general page {url}: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Error extracting info from general page {url}: {e}", exc_info=True)
+            return None
 
     def generate_affiliate_link(self, original_url):
-        """Generates an Amazon affiliate link."""
-        parsed_url = urlparse(original_url)
-        domain = parsed_url.netloc
-
-        # Resolve shortened URLs first to get the actual Amazon domain and path
-        if "amzn.to" in domain or "a.co" in domain:
-            try:
-                response = requests.head(original_url, headers=self.headers, allow_redirects=True, timeout=5)
-                response.raise_for_status()
-                original_url = response.url # Use the resolved URL
-                parsed_url = urlparse(original_url)
-                domain = parsed_url.netloc
-                logger.info(f"Resolved shortened URL to: {original_url}")
-            except requests.exceptions.RequestException as e:
-                logger.warning(f"Could not resolve shortened URL {original_url}: {e}. Proceeding with original.")
-                # Fallback: if resolution fails, try to use the original domain for tag, but might fail if not amazon.tld
-
-        # Ensure it's a supported Amazon domain before adding tag
-        if not any(d in domain for d in self.supported_domains if d not in ['amzn.to', 'a.co']): # Exclude shortened from this check
-            logger.warning(f"Unsupported domain for affiliate link generation: {domain}. Returning original URL.")
+        """Generates an Amazon affiliate link for any supported URL."""
+        resolved_url = self._resolve_url(original_url)
+        parsed_url = urlparse(resolved_url)
+        
+        # Ensure it's a supported domain
+        if not any(d in parsed_url.netloc for d in self.supported_domains):
+            logger.warning(f"Unsupported domain {parsed_url.netloc}. Returning original URL.")
             return original_url
-
-        # Remove existing tags and common tracking parameters
+        
         query_params = parse_qs(parsed_url.query)
         query_params.pop('tag', None)
         query_params.pop('ref_', None)
-        query_params.pop('th', None) # another common tracking param
-
-        # Add your affiliate tag
-        query_params['tag'] = [self.affiliate_tag]
-
-        # Reconstruct the URL, ensuring no double slashes or extra path segments
-        # Keep only domain and ASIN part, then add query
-        asin = self._get_asin_from_url(original_url)
+        query_params.pop('th', None)
         
-        if asin:
-            # Construct a clean base URL with just the domain and /dp/ASIN
-            base_url = urlunparse(parsed_url._replace(path=f"/dp/{asin}", query='', fragment=''))
-        else:
-            # If ASIN can't be found, use the path from the parsed URL (might not be ideal but better than nothing)
-            # This case means _clean_amazon_url also failed to find a standard ASIN path
-            base_url = urlunparse(parsed_url._replace(query='', fragment=''))
-            logger.warning(f"ASIN not found for {original_url}, using original path for affiliate link.")
-
-        # Add new query parameters
+        query_params['tag'] = [self.affiliate_tag]
+        
         new_query = urlencode(query_params, doseq=True)
-        affiliate_url = f"{base_url}?{new_query}" if new_query else base_url # Only add ? if query exists
+        affiliate_url = urlunparse(parsed_url._replace(query=new_query))
         
         logger.info(f"Generated affiliate link: {affiliate_url}")
         return affiliate_url
