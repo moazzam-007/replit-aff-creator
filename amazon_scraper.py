@@ -1,7 +1,7 @@
+import re
 import requests
 from bs4 import BeautifulSoup
 import logging
-import re
 from urllib.parse import urlparse, parse_qs, urlunparse, urlencode
 import json
 
@@ -24,27 +24,25 @@ class AmazonScraper:
         ]
 
     def _resolve_url(self, url):
-        """Resolves shortened URLs like amzn.to to get the final Amazon URL."""
+        """Resolves shortened URLs and redirects to get the final Amazon URL."""
         try:
-            if not any(domain in url for domain in ['amzn.to', 'a.co']):
-                return url # Not a shortened URL, no need to resolve
-            
-            response = requests.head(url, headers=self.headers, allow_redirects=True, timeout=10)
+            # Use GET request to resolve redirects, which is more reliable than HEAD
+            response = requests.get(url, headers=self.headers, allow_redirects=True, timeout=10)
             response.raise_for_status()
             final_url = response.url
-            logger.info(f"Shortened URL {url} resolved to: {final_url}")
+            logger.info(f"URL {url} resolved to: {final_url}")
             return final_url
         except requests.exceptions.RequestException as e:
             logger.warning(f"Could not resolve URL {url}: {e}. Proceeding with original.")
             return url
-    
+
     def extract_product_info(self, url):
         """Extracts product info for both product pages and general pages."""
         product_info = {
             'title': None,
-            'image_url': None,
             'price': None,
-            'is_product_link': False # Flag to distinguish product vs general links
+            'image_url': None,
+            'is_product_link': False
         }
         
         resolved_url = self._resolve_url(url)
@@ -124,7 +122,6 @@ class AmazonScraper:
         resolved_url = self._resolve_url(original_url)
         parsed_url = urlparse(resolved_url)
         
-        # Ensure it's a supported domain
         if not any(d in parsed_url.netloc for d in self.supported_domains):
             logger.warning(f"Unsupported domain {parsed_url.netloc}. Returning original URL.")
             return original_url
